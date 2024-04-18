@@ -22,7 +22,7 @@ make db
 To run the database:
 
 ```bash
-./db
+./db <name>.db
 ```
 
 You will be prompted to input commands. Currenlty supported commands are:
