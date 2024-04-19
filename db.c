@@ -177,7 +177,23 @@ uint32_t* internal_node_child(void* node, uint32_t child_num) {
 }
 
 uint32_t* internal_node_key(void* node, uint32_t key_num) {
+    /*
+    Previous implementation:
     return (void*)internal_node_cell(node, key_num) + INTERNAL_NODE_CHILD_SIZE;
+
+    The previous implementation used void pointer arithmetic,
+    which is not allowed in ANSI C.
+    */
+
+    // Get the pointer to the cell within the internal node
+    uint32_t* cell = internal_node_cell(node, key_num);
+
+    // Calculate the pointer to the key within the cell by adding the offset
+    // INTERNAL_NODE_CHILD_SIZE divided by the size of uint32_t.
+    // This is because cell is a pointer to uint32_t, so we need to divide
+    // INTERNAL_NODE_CHILD_SIZE by sizeof(uint32_t) to get the correct offset
+    // in terms of the number of uint32_t elements
+    return cell + INTERNAL_NODE_CHILD_SIZE / sizeof(uint32_t);
 }
 
 uint32_t* leaf_node_num_cells(void* node) {
@@ -426,8 +442,7 @@ void cursor_advance(Cursor* cursor) {
 }
 
 Pager* pager_open(const char* filename) {
-    int fd = open(
-        filename, 
+    int fd = open(filename, 
         O_RDWR | O_CREAT,   // rw + create file if doesn't exist
         S_IWUSR | S_IRUSR   // u+w, u+r
     );
