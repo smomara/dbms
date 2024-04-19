@@ -7,6 +7,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#define COLUMN_USERNAME_SIZE 32
+#define COLUMN_EMAIL_SIZE 255
+#define TABLE_MAX_PAGES 100
+#define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)->Attribute)
+
 typedef struct {
     char* buffer;
     size_t buffer_length;
@@ -21,8 +26,8 @@ typedef enum { PREPARE_SUCCESS, PREPARE_NEGATIVE_ID, PREPARE_STRING_TOO_LONG, PR
 
 typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
 
-#define COLUMN_USERNAME_SIZE 32
-#define COLUMN_EMAIL_SIZE 255
+typedef enum { NODE_INTERNAL, NODE_LEAF } NodeType;
+
 typedef struct {
     uint32_t id;
     char username[COLUMN_USERNAME_SIZE + 1];
@@ -34,8 +39,6 @@ typedef struct {
     Row row_to_insert;
 } Statement;
 
-#define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)->Attribute)
-
 const uint32_t ID_SIZE = size_of_attribute(Row, id);
 const uint32_t USERNAME_SIZE = size_of_attribute(Row, username);
 const uint32_t EMAIL_SIZE = size_of_attribute(Row, email);
@@ -45,9 +48,47 @@ const uint32_t EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE;
 const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
 
 const uint32_t PAGE_SIZE = 4096;
-#define TABLE_MAX_PAGES 100
+const uint32_t INVALID_PAGE_NUM = UINT32_MAX;
 
-#define INVALID_PAGE_NUM UINT32_MAX
+// common node header layout
+const uint32_t NODE_TYPE_SIZE = sizeof(uint8_t);
+const uint32_t NODE_TYPE_OFFSET = 0;
+const uint32_t IS_ROOT_SIZE = sizeof(uint8_t);
+const uint32_t IS_ROOT_OFFSET = NODE_TYPE_SIZE;
+const uint32_t PARENT_POINTER_SIZE = sizeof(uint32_t);
+const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
+const uint8_t COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
+
+// internal node header layout
+const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
+const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET = INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE;
+const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + INTERNAL_NODE_NUM_KEYS_SIZE + INTERNAL_NODE_RIGHT_CHILD_SIZE;
+
+// internal node body layout
+const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
+const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
+const uint32_t INTERNAL_NODE_MAX_KEYS = 3;  // kept small to reduce the size of testcases needed
+
+// leaf node header layout
+const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
+const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
+const uint32_t LEAF_NODE_NEXT_LEAF_SIZE = sizeof(uint32_t);
+const uint32_t LEAF_NODE_NEXT_LEAF_OFFSET = LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE;
+const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE + LEAF_NODE_NEXT_LEAF_SIZE;
+
+// leaf node body layout
+const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
+const uint32_t LEAF_NODE_KEY_OFFSET = 0;
+const uint32_t LEAF_NODE_VALUE_SIZE = ROW_SIZE;
+const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
+const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
+const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
+const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
+const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
+const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) - LEAF_NODE_RIGHT_SPLIT_COUNT;
 
 typedef struct {
     int file_descriptor;
@@ -67,49 +108,6 @@ typedef struct {
     uint32_t cell_num;
     bool end_of_table;  // one past
 } Cursor;
-
-typedef enum { NODE_INTERNAL, NODE_LEAF } NodeType;
-
-// common node header
-const uint32_t NODE_TYPE_SIZE = sizeof(uint8_t);
-const uint32_t NODE_TYPE_OFFSET = 0;
-const uint32_t IS_ROOT_SIZE = sizeof(uint8_t);
-const uint32_t IS_ROOT_OFFSET = NODE_TYPE_SIZE;
-const uint32_t PARENT_POINTER_SIZE = sizeof(uint32_t);
-const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
-const uint8_t COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
-
-// internal node header
-const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_NUM_KEYS_OFFSET = COMMON_NODE_HEADER_SIZE;
-const uint32_t INTERNAL_NODE_RIGHT_CHILD_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_RIGHT_CHILD_OFFSET = INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE;
-const uint32_t INTERNAL_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + INTERNAL_NODE_NUM_KEYS_SIZE + INTERNAL_NODE_RIGHT_CHILD_SIZE;
-
-// internal node body
-const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
-const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
-// Kept small to reduce the size of testcases needed
-const uint32_t INTERNAL_NODE_MAX_KEYS = 3;
-
-// leaf node header
-const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_NEXT_LEAF_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_NEXT_LEAF_OFFSET = LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE;
-const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE + LEAF_NODE_NEXT_LEAF_SIZE;
-
-// leaf node body
-const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
-const uint32_t LEAF_NODE_KEY_OFFSET = 0;
-const uint32_t LEAF_NODE_VALUE_SIZE = ROW_SIZE;
-const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
-const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
-const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
-const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
-const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) - LEAF_NODE_RIGHT_SPLIT_COUNT;
 
 NodeType get_node_type(void* node) {
     uint8_t value = *((uint8_t*)(node + NODE_TYPE_OFFSET));
@@ -162,22 +160,7 @@ uint32_t* internal_node_child(void* node, uint32_t child_num) {
 }
 
 uint32_t* internal_node_key(void* node, uint32_t key_num) {
-    /*
-    Previous implementation:
-    return (void*)internal_node_cell(node, key_num) + INTERNAL_NODE_CHILD_SIZE;
-
-    The previous implementation used void pointer arithmetic,
-    which is not allowed in ANSI C.
-    */
-
-    // Get the pointer to the cell within the internal node
     uint32_t* cell = internal_node_cell(node, key_num);
-
-    // Calculate the pointer to the key within the cell by adding the offset
-    // INTERNAL_NODE_CHILD_SIZE divided by the size of uint32_t.
-    // This is because cell is a pointer to uint32_t, so we need to divide
-    // INTERNAL_NODE_CHILD_SIZE by sizeof(uint32_t) to get the correct offset
-    // in terms of the number of uint32_t elements
     return cell + INTERNAL_NODE_CHILD_SIZE / sizeof(uint32_t);
 }
 
